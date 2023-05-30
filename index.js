@@ -31,6 +31,7 @@ async function run() {
     const menuCollection = client.db('bistro').collection('menu')
     const reviewCollection = client.db('bistro').collection('review')
     const cartsCollection = client.db('bistro').collection('carts')
+    const usersCollection = client.db('bistro').collection('users')
 
     app.get('/menu', async (req, res) => {
       const result = await menuCollection.find().toArray()
@@ -50,16 +51,62 @@ async function run() {
 
     })
     app.get('/carts', async (req, res) => {
-      const result = await cartsCollection.find().toArray()
+      const email = req.query.email
+      const query = { email }
+      const result = await cartsCollection.find(query).toArray()
       res.send(result)
     })
     app.delete('/carts/:id', async (req, res) => {
-      const id = req.params.id 
-      const query = {_id: new ObjectId(id)}
+      const id = req.params.id
+      const query = { _id: new ObjectId(id) }
       const result = await cartsCollection.deleteOne(query)
       res.send(result)
     })
 
+
+    app.post('/users', async (req, res) => {
+      const user = req.body
+      const query = { email: user.email }
+      const isExist = await usersCollection.findOne(query)
+      if (isExist) {
+        res.send({ message: 'user alredy exist' })
+      } else {
+        const result = await usersCollection.insertOne(user)
+        res.send(result)
+      }
+    })
+
+    app.post('/user/admin/:email', async (req, res) => {
+      const email = req.params.email
+      const r = req.body
+      const role = r.role
+      const query = { email }
+      const Updateuser = {
+        $set: {
+          role
+        }
+      }
+      const result = await usersCollection.updateOne(query, Updateuser)
+      res.send(result)
+    })
+
+
+    app.get('/users', async (req, res) => {
+      const result = await usersCollection.find().toArray()
+      res.send(result)
+    })
+
+    app.get('/userRole/:email', async (req, res) => {
+      const email = req.params.email
+      const query = { email }
+      const result = await usersCollection.findOne(query)
+      if (result?.role) {
+        res.send({ role: result?.role })
+      } else {
+        res.send({ role: 'User' })
+      }
+
+    })
 
 
 
