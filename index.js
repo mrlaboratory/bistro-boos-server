@@ -4,10 +4,36 @@ const port = process.env.PORT || 3000
 const app = express()
 require('dotenv').config()
 
+var jwt = require('jsonwebtoken');
 
 // middleware 
 app.use(cors())
 app.use(express.json())
+
+
+const verifyJWT = (req, res, next) => {
+  const authorization = req.headers.authorization 
+  try {
+    if(!authorization){
+      res.status(401).send({error:true,message:'Authorization field'})
+    }
+    // console.log(authorization);
+    const token = authorization?.split(' ')[1]
+    
+    jwt.verify(token, process.env.ACCESS_TOKEN, (err,decoded)=> {
+        if(err){
+          console.log(err);
+            return res.status(401).send({error:true, message : 'Authorization field'})
+        }
+        // console.log('token verified')
+        req.decoded = decoded
+        next()
+    })
+ } catch (error) {
+    console.log(error);
+ }
+}
+
 
 
 
@@ -33,6 +59,35 @@ async function run() {
     const cartsCollection = client.db('bistro').collection('carts')
     const usersCollection = client.db('bistro').collection('users')
 
+    const verifyAdmin = async (req, res, next) => {
+      const authorization = req.headers.authorization 
+      const userEmail = req.decoded.email
+      const email = {email:userEmail}
+      const role = await usersCollection.findOne(email)
+      if(role.role !== 'Admin'){
+        res.status(403).send({error:true,message:'Forbidden access, only for admin'})
+      }else{
+        next()
+      }
+      
+    }
+    
+    app.post('/jwt', (req, res) => {
+      try {
+        const userInfo = req.body
+        const token = jwt.sign(userInfo, process.env.ACCESS_TOKEN, { expiresIn: '1h' });
+        res.send({token})
+      } catch (error) {
+        console.log(error);
+      }
+    })
+
+    app.post('/menu',  async (req, res) => {
+      const data = req.body
+      const result = await menuCollection.insertOne(data)
+      res.send(result)
+    })
+
     app.get('/menu', async (req, res) => {
       const result = await menuCollection.find().toArray()
       res.send(result)
@@ -50,7 +105,7 @@ async function run() {
       res.send(result)
 
     })
-    app.get('/carts', async (req, res) => {
+    app.get('/carts', verifyJWT, verifyAdmin, async (req, res) => {
       const email = req.query.email
       const query = { email }
       const result = await cartsCollection.find(query).toArray()
