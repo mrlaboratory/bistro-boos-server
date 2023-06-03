@@ -3,6 +3,7 @@ const cors = require('cors');
 const port = process.env.PORT || 3000
 const app = express()
 require('dotenv').config()
+const stripe = require('stripe')(process.env.STRIPE_KEY);
 
 var jwt = require('jsonwebtoken');
 
@@ -12,26 +13,26 @@ app.use(express.json())
 
 
 const verifyJWT = (req, res, next) => {
-  const authorization = req.headers.authorization 
+  const authorization = req.headers.authorization
   try {
-    if(!authorization){
-      res.status(401).send({error:true,message:'Authorization field'})
+    if (!authorization) {
+      res.status(401).send({ error: true, message: 'Authorization field' })
     }
     // console.log(authorization);
     const token = authorization?.split(' ')[1]
-    
-    jwt.verify(token, process.env.ACCESS_TOKEN, (err,decoded)=> {
-        if(err){
-          console.log(err);
-            return res.status(401).send({error:true, message : 'Authorization field'})
-        }
-        // console.log('token verified')
-        req.decoded = decoded
-        next()
+
+    jwt.verify(token, process.env.ACCESS_TOKEN, (err, decoded) => {
+      if (err) {
+        console.log(err);
+        return res.status(401).send({ error: true, message: 'Authorization field' })
+      }
+      // console.log('token verified')
+      req.decoded = decoded
+      next()
     })
- } catch (error) {
+  } catch (error) {
     console.log(error);
- }
+  }
 }
 
 
@@ -58,31 +59,53 @@ async function run() {
     const reviewCollection = client.db('bistro').collection('review')
     const cartsCollection = client.db('bistro').collection('carts')
     const usersCollection = client.db('bistro').collection('users')
+    const paymentsCollection = client.db('bistro').collection('payments')
 
     const verifyAdmin = async (req, res, next) => {
-      const authorization = req.headers.authorization 
+      const authorization = req.headers.authorization
       const userEmail = req.decoded.email
-      const email = {email:userEmail}
+      const email = { email: userEmail }
       const role = await usersCollection.findOne(email)
-      if(role.role !== 'Admin'){
-        res.status(403).send({error:true,message:'Forbidden access, only for admin'})
-      }else{
+      if (role.role !== 'Admin') {
+        res.status(403).send({ error: true, message: 'Forbidden access, only for admin' })
+      } else {
         next()
       }
-      
+
     }
+
     
+
+
+
     app.post('/jwt', (req, res) => {
       try {
         const userInfo = req.body
         const token = jwt.sign(userInfo, process.env.ACCESS_TOKEN, { expiresIn: '1h' });
-        res.send({token})
+        res.send({ token })
       } catch (error) {
         console.log(error);
       }
     })
 
-    app.post('/menu',  async (req, res) => {
+    app.get('/useritem/:email', verifyJWT, verifyAdmin, async (req, res) => {
+      const userEmail = req.params.email
+      let query = {email:'test'}
+      if(userEmail){
+        query = {email:userEmail} 
+      }
+      const result = await menuCollection.find(query).toArray()
+      res.send(result)
+    })
+
+    app.delete('/useritem/:id', verifyJWT,  async (req, res) => {
+      const id = req.params.id
+      let query = {_id: new ObjectId(id)}
+      const result = await menuCollection.deleteOne(query)
+      res.send(result)
+    })
+
+    app.post('/menu', async (req, res) => {
       const data = req.body
       const result = await menuCollection.insertOne(data)
       res.send(result)
@@ -105,7 +128,7 @@ async function run() {
       res.send(result)
 
     })
-    app.get('/carts', verifyJWT, verifyAdmin, async (req, res) => {
+    app.get('/carts', verifyJWT,  async (req, res) => {
       const email = req.query.email
       const query = { email }
       const result = await cartsCollection.find(query).toArray()
@@ -167,7 +190,87 @@ async function run() {
 
 
 
+    // create intent function 
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = price*100
+    
+      // Create a PaymentIntent with the order amount and currency
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ['card']
+        // automatic_payment_methods: {
+        //   enabled: true,
+        // },
+      });
+    
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
 
+
+  app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) => {
+     try {
+      const users = await usersCollection.estimatedDocumentCount();
+      const products = await menuCollection.estimatedDocumentCount();
+      const orders = await paymentsCollection.estimatedDocumentCount()
+      const payments = await paymentsCollection.find().toArray();
+      const revenue = payments.reduce( ( sum, payment) => sum + payment.price, 0)
+      res.send({
+        revenue,
+        users,
+        products,
+        orders
+      })
+     } catch (error) {
+      console.log(error);
+     }
+    })
+    app.post('/payments',async (req,res)=> {
+      const info = req.body 
+      const insertResult = await paymentsCollection.insertOne(info)
+      const query = { _id: { $in: info.cartItems.map(id => new ObjectId(id)) } }
+      const deleteResult = await cartsCollection.deleteMany(query)
+      res.send({ insertResult, deleteResult });
+    })
+
+
+    app.get('/order-stats', async(req, res) =>{
+      const pipeline = [
+        {
+          $lookup: {
+            from: 'menu',
+            localField: 'menuItems',
+            foreignField: '_id',
+            as: 'menuItemsData'
+          }
+        },
+        {
+          $unwind: '$menuItemsData'
+        },
+        {
+          $group: {
+            _id: '$menuItemsData.category',
+            count: { $sum: 1 },
+            total: { $sum: '$menuItemsData.price' }
+          }
+        },
+        {
+          $project: {
+            category: '$_id',
+            count: 1,
+            total: { $round: ['$total', 2] },
+            _id: 0
+          }
+        }
+      ];
+
+      const result = await paymentsCollection.aggregate(pipeline).toArray()
+      res.send(result)
+
+    })
 
 
     // Send a ping to confirm a successful connection
